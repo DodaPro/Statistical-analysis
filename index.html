@@ -4079,6 +4079,70 @@
         }
       }
 
+      /* ---- فهرس الأسئلة (للتحديث السريع) ---- */
+      const QMAP = {};
+      L.forEach((l) => {
+        ["mcq", "tf", "essay"].forEach((t) => {
+          (t === "mcq" ? l.mcq : t === "tf" ? l.tf : l.essay).forEach(
+            (it, i) => {
+              QMAP[qid(l.id, t, i)] = { lid: l.id, type: t, i: i, it: it };
+            },
+          );
+        });
+      });
+
+      /* ---- تحديث سريع لبطاقة سؤال واحد بدل إعادة رسم الصفحة كلها ---- */
+      function typesetEl(el) {
+        try {
+          if (window.MathJax && MathJax.typesetPromise)
+            Promise.resolve()
+              .then(() => MathJax.typesetPromise([el]))
+              .catch(() => {});
+        } catch (e) {}
+      }
+      function refreshCard(id) {
+        const card = document.getElementById("c-" + id);
+        const q = QMAP[id];
+        if (!card || !q) {
+          render();
+          return;
+        }
+        const tmp = document.createElement("div");
+        tmp.innerHTML = mcqCard(q.lid, q.type, q.i, q.it);
+        const nc = tmp.firstElementChild;
+        card.replaceWith(nc);
+        typesetEl(nc);
+        refreshCounter();
+      }
+      function refreshCounter() {
+        const chip = document.querySelector(".secbar .chip");
+        if (!chip) return;
+        try {
+          if (cur.view === "sec") {
+            const l = L.find((x) => x.id === cur.lid);
+            if (!l) return;
+            const type = cur.tab || "mcq";
+            const items =
+              (type === "mcq" ? l.mcq : type === "tf" ? l.tf : l.essay) || [];
+            const isEssay = type === "essay";
+            let a = 0;
+            if (isEssay)
+              items.forEach((it, i) => {
+                if (S.a["s" + qid(l.id, type, i)] === 1) a++;
+              });
+            else
+              items.forEach((it, i) => {
+                if (S.a[qid(l.id, type, i)] !== undefined) a++;
+              });
+            chip.textContent =
+              (isEssay ? "فتحت الحل " : "جاوبت ") + a + " / " + items.length;
+          } else if (cur.view === "exam" && S.exam) {
+            const a = S.exam.filter((pid) => S.a[pid] !== undefined).length;
+            chip.textContent = "جاوبت " + a + " / " + S.exam.length;
+          }
+        } catch (e) {}
+      }
+
       document.addEventListener("click", (e) => {
         const t = e.target;
         const dh = t.closest(".dhead");
@@ -4118,14 +4182,14 @@
           const id = h.dataset.hint;
           S.a["h" + id] = S.a["h" + id] ? 0 : 1;
           save();
-          render();
+          refreshCard(id);
           return;
         }
         const so = t.closest("[data-sol]");
         if (so) {
           S.a["s" + so.dataset.sol] = 1;
           save();
-          render();
+          refreshCard(so.dataset.sol);
           return;
         }
         const mk = t.closest("[data-mark]");
@@ -4133,7 +4197,7 @@
           const p = mk.dataset.mark.split(":");
           S.m[p[1]] = p[0];
           save();
-          render();
+          refreshCard(p[1]);
           return;
         }
         const cl = t.closest("[data-clear]");
@@ -4142,7 +4206,7 @@
           delete S.a[id];
           delete S.a["n" + id];
           save();
-          render();
+          refreshCard(id);
           return;
         }
         const o = t.closest(".opt[data-o]");
@@ -4158,7 +4222,7 @@
           )
             S.a["n" + id] = 1;
           save();
-          render();
+          refreshCard(id);
           return;
         }
         const sub = t.closest("[data-submit]");

@@ -589,22 +589,59 @@
           window.localStorage.setItem(k, v);
         } catch (e) {}
       }
-      const K = "statsSession";
-      let S = (function () {
+      /* ===== تخزين مزدوج: sessionStorage + localStorage مع حارس جلسة ===== */
+      const K = "statsSession",
+        KA = "statsAlive";
+      function freshS() {
+        return { a: {}, m: {}, mode: {}, exam: null };
+      }
+      const SSOK = (function () {
         try {
-          return (
-            JSON.parse(sGet(K) || "null") || {
-              a: {},
-              m: {},
-              mode: {},
-              exam: null,
-            }
-          );
+          window.sessionStorage.setItem("__t", "1");
+          window.sessionStorage.removeItem("__t");
+          return true;
         } catch (e) {
-          return { a: {}, m: {}, mode: {}, exam: null };
+          return false;
         }
       })();
-      const save = () => sSet(K, JSON.stringify(S));
+      let S = (function () {
+        let v = null;
+        try {
+          v = JSON.parse(sGet(K) || "null");
+        } catch (e) {}
+        if (!SSOK) {
+          let lv = null;
+          try {
+            lv = JSON.parse(lGet(K) || "null");
+          } catch (e) {}
+          return lv || v || freshS();
+        }
+        const alive = sGet(KA) === "1";
+        if (!alive) {
+          try {
+            localStorage.removeItem(K);
+          } catch (e) {}
+          try {
+            sessionStorage.setItem(KA, "1");
+          } catch (e) {}
+          return v || freshS();
+        }
+        let lv = null;
+        try {
+          lv = JSON.parse(lGet(K) || "null");
+        } catch (e) {}
+        return lv || v || freshS();
+      })();
+      const save = () => {
+        const j = JSON.stringify(S);
+        if (SSOK) {
+          sSet(K, j);
+          try {
+            window.sessionStorage.setItem(KA, "1");
+          } catch (e) {}
+        }
+        lSet(K, j);
+      };
 
       const FIGS = {
         sym: {
@@ -3626,13 +3663,16 @@
         if (type === "mcq") return ans === it.a;
         return (ans === 1) === (it.a === 1);
       }
-
       function mcqCard(lid, type, i, it) {
-        const id = qid(lid, type, i),
-          ans = S.a[id];
-        const inExam = cur.view === "exam";
-        const mode = inExam ? "exam" : S.mode[lid] || "study";
-        const revealed = S.a["n" + id] === 1;
+        const id = qid(lid, type, i);
+        const isExamMode =
+          cur.view === "exam" ||
+          (cur.view === "sec" &&
+            type !== "essay" &&
+            (S.mode[lid] || "study") === "exam");
+        const ans = isExamMode ? S.a["x" + id] : S.a[id];
+        const mode = isExamMode ? "exam" : S.mode[lid] || "study";
+        const revealed = (isExamMode ? S.a["xn" + id] : S.a["n" + id]) === 1;
         let inner = "";
         if (type === "mcq") {
           inner =
@@ -3700,7 +3740,7 @@
             '<button class="tbtn blue" data-sol="' +
             id +
             '">📄 إظهار الحل النموذجي</button>';
-        if (type !== "essay" && revealed && mode === "study")
+        if (type !== "essay" && revealed && !isExamMode)
           tools +=
             '<button class="tbtn" data-clear="' +
             id +
@@ -3774,17 +3814,23 @@
           (type === "mcq" ? l.mcq : type === "tf" ? l.tf : l.essay) || [];
         const isEssay = type === "essay";
         const mode = isEssay ? "study" : S.mode[l.id] || "study";
+        S.mode[l.id] = mode;
+        save();
+        const isExamMode = !isEssay && mode === "exam";
         let answered = 0;
         if (isEssay)
           items.forEach((it, i) => {
             if (S.a["s" + qid(l.id, type, i)] === 1) answered++;
           });
+        else if (isExamMode)
+          items.forEach((it, i) => {
+            if (S.a["x" + qid(l.id, type, i)] !== undefined) answered++;
+          });
         else
           items.forEach((it, i) => {
             if (S.a[qid(l.id, type, i)] !== undefined) answered++;
           });
-        const graded =
-          !isEssay && mode === "exam" && S.a["G" + l.id + type] === 1;
+        const graded = isExamMode && S.a["G" + l.id + type] === 1;
         let head = '<h1 class="pg">📘 ' + l.t + " — " + TABN[type] + "</h1>";
         head +=
           '<div class="secbar">' +
@@ -3815,11 +3861,11 @@
               '">🔄 إعادة القسم</button>'
             : "") +
           "</div>";
-        if (!isEssay && mode === "exam" && !graded && items.length)
+        if (isExamMode && !graded && items.length)
           head +=
-            '<div class="sub" style="margin-bottom:10px">جاوب على كل الأسئلة ثم اضغط زر التسليم في الآخر — الإجابات محفوظة تلقائياً.</div>';
+            '<div class="sub" style="margin-bottom:10px">جاوب على كل الأسئلة ثم اضغط زر التسليم — إجابات اختبارك محفوظة لحالها ومش بتلمس مذاكرتك.</div>';
         let body = items.map((it, i) => mcqCard(l.id, type, i, it)).join("");
-        if (!isEssay && mode === "exam" && !graded && items.length)
+        if (isExamMode && !graded && items.length)
           body +=
             '<div class="score">جاهز؟ 📝 <button class="tbtn blue" data-submit="' +
             l.id +
@@ -3837,8 +3883,8 @@
         let r = 0;
         items.forEach((it, i) => {
           const id = qid(lid, type, i);
-          S.a["n" + id] = 1;
-          if (isCorrect(type, it, S.a[id])) r++;
+          S.a["xn" + id] = 1;
+          if (isCorrect(type, it, S.a["x" + id])) r++;
         });
         S.a["G" + lid + type] = 1;
         S.a["R" + lid + type] = r;
@@ -3901,7 +3947,29 @@
         });
         return p;
       }
+      function clearExamKeys() {
+        Object.keys(S.a)
+          .filter((k) => k[0] === "x")
+          .forEach((k) => {
+            delete S.a[k];
+          });
+      }
+      function parsePid(pid) {
+        for (let li = 0; li < L.length; li++) {
+          const l = L[li];
+          if (pid.startsWith(l.id)) {
+            const rest = pid.slice(l.id.length);
+            const t = rest[0] === "m" ? "mcq" : "tf";
+            const i = +rest.slice(1);
+            const it = (t === "mcq" ? l.mcq : l.tf)[i];
+            return it ? { lid: l.id, type: t, i: i, it: it } : null;
+          }
+        }
+        return null;
+      }
       function startExam(n) {
+        clearExamKeys();
+        delete S.a["Gexam"];
         const pool = allPool();
         for (let i = pool.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
@@ -3910,7 +3978,6 @@
           pool[j] = tmp;
         }
         S.exam = pool.slice(0, n === "all" ? pool.length : +n).map((p) => p.id);
-        delete S.a["Gexam"];
         save();
         render();
       }
@@ -3930,26 +3997,16 @@
               )
               .join("") +
             '<button class="tbtn blue" data-n="all" style="font-size:15px;padding:10px 22px">كل الأسئلة</button></div>' +
-            '<div class="sub" style="margin-top:10px">أسئلة مخلوطة (اختياري + صح وخطأ) من كل المحاضرات.</div></div>';
+            '<div class="sub" style="margin-top:10px">أسئلة مخلوطة من كل المحاضرات — اختبار مستقل تماماً، إجاباتك هنا مش بتأثر على أقسام المذاكرة.</div></div>';
           return;
         }
-        const items = S.exam
-          .map((pid) => {
-            const lid = pid.slice(0, 3);
-            const l = L.find((x) => x.id === lid);
-            if (!l) return null;
-            const t = pid[3] === "m" ? "mcq" : "tf";
-            const i = +pid.slice(4);
-            const it = (t === "mcq" ? l.mcq : l.tf)[i];
-            return it ? { lid: lid, type: t, i: i, it: it } : null;
-          })
-          .filter(Boolean);
+        const items = S.exam.map(parsePid).filter(Boolean);
         const graded = S.a["Gexam"] === 1;
         let head =
           '<h1 class="pg">🧪 الاختبار الشامل (' +
           items.length +
           ' سؤال)</h1><div class="secbar"><span class="chip">جاوبت ' +
-          items.filter((x) => S.a[qid(x.lid, x.type, x.i)] !== undefined)
+          items.filter((x) => S.a["x" + qid(x.lid, x.type, x.i)] !== undefined)
             .length +
           " / " +
           items.length +
@@ -3974,15 +4031,10 @@
       function gradeExam() {
         let r = 0;
         S.exam.forEach((pid) => {
-          const lid = pid.slice(0, 3);
-          const l = L.find((x) => x.id === lid);
-          if (!l) return;
-          const t = pid[3] === "m" ? "mcq" : "tf";
-          const i = +pid.slice(4);
-          const it = (t === "mcq" ? l.mcq : l.tf)[i];
-          if (!it) return;
-          S.a["n" + pid] = 1;
-          if (isCorrect(t, it, S.a[pid])) r++;
+          const q = parsePid(pid);
+          if (!q) return;
+          S.a["xn" + pid] = 1;
+          if (isCorrect(q.type, q.it, S.a["x" + pid])) r++;
         });
         S.a["Gexam"] = 1;
         S.a["Rexam"] = r;
@@ -4079,7 +4131,7 @@
         }
       }
 
-      /* ---- فهرس الأسئلة (للتحديث السريع) ---- */
+      /* ---- فهرس الأسئلة + التحديث السريع لبطاقة واحدة ---- */
       const QMAP = {};
       L.forEach((l) => {
         ["mcq", "tf", "essay"].forEach((t) => {
@@ -4090,8 +4142,6 @@
           );
         });
       });
-
-      /* ---- تحديث سريع لبطاقة سؤال واحد بدل إعادة رسم الصفحة كلها ---- */
       function typesetEl(el) {
         try {
           if (window.MathJax && MathJax.typesetPromise)
@@ -4125,10 +4175,15 @@
             const items =
               (type === "mcq" ? l.mcq : type === "tf" ? l.tf : l.essay) || [];
             const isEssay = type === "essay";
+            const isExamMode = !isEssay && (S.mode[l.id] || "study") === "exam";
             let a = 0;
             if (isEssay)
               items.forEach((it, i) => {
                 if (S.a["s" + qid(l.id, type, i)] === 1) a++;
+              });
+            else if (isExamMode)
+              items.forEach((it, i) => {
+                if (S.a["x" + qid(l.id, type, i)] !== undefined) a++;
               });
             else
               items.forEach((it, i) => {
@@ -4137,7 +4192,9 @@
             chip.textContent =
               (isEssay ? "فتحت الحل " : "جاوبت ") + a + " / " + items.length;
           } else if (cur.view === "exam" && S.exam) {
-            const a = S.exam.filter((pid) => S.a[pid] !== undefined).length;
+            const a = S.exam.filter(
+              (pid) => S.a["x" + pid] !== undefined,
+            ).length;
             chip.textContent = "جاوبت " + a + " / " + S.exam.length;
           }
         } catch (e) {}
@@ -4167,12 +4224,6 @@
         const m = t.closest("[data-mode]");
         if (m) {
           S.mode[cur.lid] = m.dataset.mode;
-          if (m.dataset.mode === "exam" && cur.tab && cur.tab !== "essay") {
-            secIds(cur.lid, cur.tab).forEach((id) => {
-              delete S.a["n" + id];
-            });
-            delete S.a["G" + cur.lid + cur.tab];
-          }
           save();
           render();
           return;
@@ -4212,15 +4263,15 @@
         const o = t.closest(".opt[data-o]");
         if (o) {
           const id = o.dataset.q;
-          if (S.a["n" + id] === 1) return;
-          S.a[id] = +o.dataset.o;
-          if (
-            cur.view !== "exam" &&
-            cur.lid &&
-            cur.tab !== "essay" &&
-            S.mode[cur.lid] === "study"
-          )
-            S.a["n" + id] = 1;
+          const isExamMode =
+            cur.view === "exam" ||
+            (cur.view === "sec" &&
+              cur.tab !== "essay" &&
+              (S.mode[cur.lid] || "study") === "exam");
+          const nkey = isExamMode ? "xn" + id : "n" + id;
+          if (S.a[nkey] === 1) return;
+          S.a[isExamMode ? "x" + id : id] = +o.dataset.o;
+          if (!isExamMode && cur.lid && cur.tab !== "essay") S.a["n" + id] = 1;
           save();
           refreshCard(id);
           return;
@@ -4238,14 +4289,18 @@
           if (p[0] === "exam") {
             S.exam = null;
             delete S.a["Gexam"];
+            clearExamKeys();
             save();
             render();
           } else {
             secIds(p[0], p[1]).forEach((id) => {
               delete S.a[id];
               delete S.a["n" + id];
+              delete S.a["x" + id];
+              delete S.a["xn" + id];
             });
             delete S.a["G" + p[0] + p[1]];
+            delete S.a["R" + p[0] + p[1]];
             save();
             render();
           }
@@ -4261,7 +4316,10 @@
           closeDrawer();
           if (g.dataset.go === "reset") {
             if (confirm("هيمسح كل إجاباتك في الجلسة. متأكد؟")) {
-              S = { a: {}, m: {}, mode: {}, exam: null };
+              S = freshS();
+              try {
+                localStorage.removeItem(K);
+              } catch (e) {}
               save();
               go("home");
             }
